@@ -23,7 +23,7 @@ export default function LogsPage() {
     todo_id: '',
     start_time: '08:00',
     end_time: '16:00',
-    focused_minutes: 0,
+    focused_minutes: '0',
     notes: '',
   });
   const [loading, setLoading] = useState(false);

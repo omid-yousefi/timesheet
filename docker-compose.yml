@@ -17,13 +17,18 @@ services:
     build: ./backend
     environment:
       DATABASE_URL: postgresql+psycopg://timesheet:${POSTGRES_PASSWORD:-timesheet_dev_password}@postgres:5432/timesheet
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
-      ACCESS_TOKEN_EXPIRE_MINUTES: 480
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      ADMIN_FULL_NAME: ${ADMIN_FULL_NAME:-System Administrator}
+      ADMIN_DEPARTMENT: ${ADMIN_DEPARTMENT:-مدیریت}
     depends_on:
       postgres:
         condition: service_healthy
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    # Apply migrations, seed the bootstrap admin, then launch the API.
+    command: sh -c "alembic upgrade head && python scripts/seed_admin.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   frontend:
     build: ./frontend
