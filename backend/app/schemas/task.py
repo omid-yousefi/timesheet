@@ -27,6 +27,15 @@ class TodoAdminOut(ORMModel):
     is_active: bool
 
 
+class TaskOutWithTodos(ORMModel):
+    """Task with its todos — used in the task logging page for auto-population."""
+    id: int
+    name: str
+    department_id: int
+    is_active: bool
+    todos: List[TodoOut] = []
+
+
 class TaskAdminOut(ORMModel):
     """Rich task view for the admin panel, including its to-dos."""
     id: int

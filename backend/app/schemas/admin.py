@@ -41,3 +41,13 @@ class TaskCreate(BaseModel):
     quality: str = Field(min_length=1, max_length=255)
     priority: int = Field(default=1, ge=0, le=5)
     weight: Decimal = Field(default=Decimal('1.0'), ge=0, max_digits=8, decimal_places=2)
+
+
+class TaskUpdate(BaseModel):
+    """Allow-listed fields for updating a task and its primary todo."""
+    name: Optional[str] = None
+    department_id: Optional[int] = None
+    quality: Optional[str] = None
+    priority: Optional[int] = None
+    weight: Optional[Decimal] = None
+    is_active: Optional[bool] = None

@@ -8,7 +8,7 @@ from app.api.deps import get_current_user
 from app.models.user import User, RoleEnum
 from app.models.task import Task, TaskTodo
 from app.models.timesheet import Timesheet
-from app.schemas.timesheet import TimesheetCreate, TimesheetOut
+from app.schemas.timesheet import TimesheetCreate, TimesheetOutWithRelations
 from app.services.audit import audit
 
 router = APIRouter(prefix='/timesheets', tags=['timesheets'])
@@ -23,10 +23,11 @@ def ensure_same_day_editable(payload: TimesheetCreate, user: User):
 def to_minutes(t):
     return t.hour * 60 + t.minute
 
-@router.post('', response_model=TimesheetOut)
+@router.post('', response_model=TimesheetOutWithRelations)
 def create_timesheet(payload: TimesheetCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     ensure_same_day_editable(payload, user)
-    task = db.get(Task, payload.task_id); todo = db.get(TaskTodo, payload.todo_id)
+    task = db.get(Task, payload.task_id)
+    todo = db.get(TaskTodo, payload.todo_id)
     if not task or task.department_id != user.department_id or not todo or todo.task_id != task.id:
         raise HTTPException(400, 'Invalid task or to-do')
     start, end = to_minutes(payload.start_time), to_minutes(payload.end_time)
@@ -35,9 +36,20 @@ def create_timesheet(payload: TimesheetCreate, db: Session = Depends(get_db), us
         if start < to_minutes(r.end_time) and end > to_minutes(r.start_time):
             raise HTTPException(409, 'Time interval overlaps an existing entry')
     row = Timesheet(user_id=user.id, department_id=user.department_id, **payload.model_dump())
-    db.add(row); db.flush(); audit(db, user.id, 'CREATE', 'timesheet', str(row.id)); db.commit(); db.refresh(row)
+    db.add(row)
+    db.flush()
+    audit(db, user.id, 'CREATE', 'timesheet', str(row.id))
+    db.commit()
+    db.refresh(row)
     return row
 
-@router.get('/history', response_model=list[TimesheetOut])
+@router.get('/history', response_model=list[TimesheetOutWithRelations])
 def history(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    return db.query(Timesheet).filter_by(user_id=user.id).order_by(Timesheet.work_date.desc(), Timesheet.start_time.desc()).limit(200).all()
+    return (
+        db.query(Timesheet)
+        .options(joinedload(Timesheet.task), joinedload(Timesheet.todo))
+        .filter_by(user_id=user.id)
+        .order_by(Timesheet.work_date.desc(), Timesheet.start_time.desc())
+        .limit(200)
+        .all()
+    )
