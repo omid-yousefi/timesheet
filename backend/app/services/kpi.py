@@ -176,7 +176,7 @@ def summarize(rows: list[Timesheet]) -> dict:
 def _label_for_date(d: date, period: str) -> str:
     jalali = _to_jalali_short(d)
     if period == 'weekly':
-        return f'{WEEKDAYS_PERSIAN[(d.weekday() + 1) % 7]} {jalali}'
+        return f'{WEEKDAYS_PERSIAN[(d.weekday() + 2) % 7]} {jalali}'
     return jalali
 
 

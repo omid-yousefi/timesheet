@@ -74,6 +74,7 @@ def list_department_employees(
     if manager.role == RoleEnum.MANAGER:
         q = q.filter(User.department_id == manager.department_id)
     q = q.filter(User.role != RoleEnum.ADMIN)
+    q = q.filter(User.id != manager.id)
     employees = q.order_by(User.full_name).all()
     return [
         {

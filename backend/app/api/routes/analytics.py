@@ -29,7 +29,7 @@ def _today() -> date:
 
 def _week_range_for(day: date) -> tuple[date, date]:
     """Saturday → Friday range containing the supplied date."""
-    days_since_saturday = (day.weekday() + 1) % 7
+    days_since_saturday = (day.weekday() + 2) % 7
     start = day - timedelta(days=days_since_saturday)
     return start, start + timedelta(days=6)
 
@@ -61,7 +61,7 @@ def _range_for_period(period: str, month_year: str | None = None) -> tuple[date,
 
 def _period_label(period: str, start: date, end: date, jy: int | None = None, jm: int | None = None) -> str:
     today = _today()
-    weekday_name = WEEKDAYS_PERSIAN[(today.weekday() + 1) % 7]
+    weekday_name = WEEKDAYS_PERSIAN[(today.weekday() + 2) % 7]
 
     if period == 'daily':
         return f'امروز {weekday_name} {_to_jalali_short(today)}'
@@ -212,7 +212,7 @@ def my_analytics_by_period(
         },
         'today_info': {
             'jalali': _to_jalali_short(today),
-            'weekday': WEEKDAYS_PERSIAN[(today.weekday() + 1) % 7],
+            'weekday': WEEKDAYS_PERSIAN[(today.weekday() + 2) % 7],
             'month_name': JALALI_MONTHS[today_jm - 1],
             'year': today_jy,
         },
