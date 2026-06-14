@@ -42,6 +42,8 @@ const PRIORITY_OPTIONS = [
   { value: 3, label: 'فوری (۳)' },
 ];
 
+const TASK_PAGE_SIZE = 10;
+
 export default function Admin() {
   const [users, setUsers] = useState<User[]>([]);
   const [depts, setDepts] = useState<Department[]>([]);
@@ -52,6 +54,7 @@ export default function Admin() {
 
   // Department filter for tasks
   const [taskDeptFilter, setTaskDeptFilter] = useState<string>('');
+  const [taskPage, setTaskPage] = useState(1);
 
   // User form
   const [newUser, setNewUser] = useState({
@@ -132,6 +135,7 @@ export default function Admin() {
       const params = deptId ? `?department_id=${deptId}` : '';
       const data = await api<AdminTask[]>(`/admin/tasks${params}`);
       setTasks(data);
+      setTaskPage(1);
     } catch (err) {
       console.error('Failed to fetch tasks', err);
     }
@@ -358,6 +362,10 @@ export default function Admin() {
         ? 'bg-accent text-white'
         : 'bg-white text-slate-600 hover:bg-slate-100 dark:bg-slate-900 dark:text-slate-300'
     }`;
+
+  const taskTotalPages = Math.max(1, Math.ceil(tasks.length / TASK_PAGE_SIZE));
+  const safeTaskPage = Math.min(taskPage, taskTotalPages);
+  const paginatedTasks = tasks.slice((safeTaskPage - 1) * TASK_PAGE_SIZE, safeTaskPage * TASK_PAGE_SIZE);
 
   return (
     <Shell>
@@ -822,7 +830,7 @@ export default function Admin() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {tasks.map(t => (
+                  {paginatedTasks.map(t => (
                     <div key={t.id} className="rounded-xl border border-slate-200 p-4 dark:border-slate-800">
                       <div className="flex items-center justify-between">
                         <div>
@@ -863,6 +871,43 @@ export default function Admin() {
                       )}
                     </div>
                   ))}
+                </div>
+              )}
+
+              {tasks.length > TASK_PAGE_SIZE && (
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-200 dark:border-slate-800">
+                  <span className="text-sm text-slate-500">
+                    صفحه {safeTaskPage} از {taskTotalPages} — {tasks.length} وظیفه
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      className="px-3 py-1 rounded-lg text-sm border border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+                      disabled={safeTaskPage === 1}
+                      onClick={() => setTaskPage(p => Math.max(1, p - 1))}
+                    >
+                      قبلی
+                    </button>
+                    {Array.from({ length: taskTotalPages }, (_, i) => i + 1).map(page => (
+                      <button
+                        key={page}
+                        className={`px-3 py-1 rounded-lg text-sm transition ${
+                          page === safeTaskPage
+                            ? 'bg-accent text-white'
+                            : 'border border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'
+                        }`}
+                        onClick={() => setTaskPage(page)}
+                      >
+                        {page}
+                      </button>
+                    ))}
+                    <button
+                      className="px-3 py-1 rounded-lg text-sm border border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+                      disabled={safeTaskPage === taskTotalPages}
+                      onClick={() => setTaskPage(p => Math.min(taskTotalPages, p + 1))}
+                    >
+                      بعدی
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

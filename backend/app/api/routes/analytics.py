@@ -1,7 +1,6 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
@@ -10,114 +9,145 @@ from app.api.deps import get_current_user, require_roles
 from app.models.user import User, RoleEnum
 from app.models.timesheet import Timesheet
 from app.models.department import Department
-from app.services.kpi import summarize, summarize_by_period, _to_jalali_short
+from app.services.kpi import (
+    JALALI_MONTHS,
+    WEEKDAYS_PERSIAN,
+    jalali_month_label,
+    jalali_month_range,
+    summarize,
+    summarize_by_period,
+    _to_jalali_parts,
+    _to_jalali_short,
+)
+
+router = APIRouter(prefix='/analytics', tags=['analytics'])
 
 
-def _get_today_jalali() -> tuple[int, int, int]:
-    """Return (year, month, day) for today in Jalali."""
-    today = date.today()
-    label = _to_jalali_short(today)
-    parts = label.split('/')
-    return int(parts[0]), int(parts[1]), int(parts[2])
+def _today() -> date:
+    return datetime.now(ZoneInfo(settings.timezone)).date()
 
 
-def _week_range_for_today() -> tuple[date, date]:
-    """Saturday → Friday range containing today."""
-    today = date.today()
-    # Python weekday: Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
-    # Saturday=5, so days since Saturday:
-    days_since_saturday = (today.weekday() + 1) % 7
-    start = today - timedelta(days=days_since_saturday)
-    end = start + timedelta(days=6)
-    return start, end
+def _week_range_for(day: date) -> tuple[date, date]:
+    """Saturday → Friday range containing the supplied date."""
+    days_since_saturday = (day.weekday() + 1) % 7
+    start = day - timedelta(days=days_since_saturday)
+    return start, start + timedelta(days=6)
 
 
-def _jalali_is_leap(year: int) -> bool:
-    """Check if a Jalali year is a leap year."""
-    breaks = [1, 5, 9, 13, 17, 22, 26, 30]
-    cycle_pos = (year - 474) % 2820
-    return cycle_pos in breaks
+def _parse_month_year(month_year: str | None, fallback_day: date) -> tuple[int, int]:
+    if not month_year:
+        jy, jm, _ = _to_jalali_parts(fallback_day)
+        return jy, jm
+    try:
+        jy, jm = map(int, month_year.split('/'))
+    except ValueError:
+        raise HTTPException(422, 'month_year must be in Jalali YYYY/MM format')
+    if jm < 1 or jm > 12:
+        raise HTTPException(422, 'Jalali month must be between 1 and 12')
+    return jy, jm
 
 
-def _jalali_month_days(year: int, month: int) -> int:
-    """Number of days in a given Jalali month."""
-    if month <= 6:
-        return 31
-    elif month <= 11:
-        return 30
-    else:
-        return 30 if _jalali_is_leap(year) else 29
+def _range_for_period(period: str, month_year: str | None = None) -> tuple[date, date, int | None, int | None]:
+    today = _today()
+    if period == 'daily':
+        return today, today, None, None
+    if period == 'weekly':
+        start, end = _week_range_for(today)
+        return start, end, None, None
+    jy, jm = _parse_month_year(month_year, today)
+    start, end = jalali_month_range(jy, jm)
+    return start, end, jy, jm
 
 
-def _jalali_to_gregorian(jy: int, jm: int, jd: int) -> date:
-    """Convert Jalali date to Gregorian date using reference point."""
-    # Reference: 1400/01/01 = 2021-03-21
-    ref_jy, ref_jm, ref_jd = 1400, 1, 1
-    ref_greg = date(2021, 3, 21)
+def _period_label(period: str, start: date, end: date, jy: int | None = None, jm: int | None = None) -> str:
+    today = _today()
+    weekday_name = WEEKDAYS_PERSIAN[(today.weekday() + 1) % 7]
 
-    target_days = 0
-    if jy > ref_jy:
-        for y in range(ref_jy, jy):
-            target_days += 366 if _jalali_is_leap(y) else 365
-    elif jy < ref_jy:
-        for y in range(jy, ref_jy):
-            target_days -= 366 if _jalali_is_leap(y) else 365
+    if period == 'daily':
+        return f'امروز {weekday_name} {_to_jalali_short(today)}'
+    if period == 'weekly':
+        return f'هفته جاری: {_to_jalali_short(start)} تا {_to_jalali_short(end)}'
 
-    for m in range(1, jm):
-        target_days += _jalali_month_days(jy, m)
-
-    target_days += jd - ref_jd
-
-    return ref_greg + timedelta(days=target_days)
+    if jy is None or jm is None:
+        jy, jm, _ = _to_jalali_parts(start)
+    return f'{jalali_month_label(jy, jm)}: {_to_jalali_short(start)} تا {_to_jalali_short(end)}'
 
 
-def _month_range(jy: int, jm: int) -> tuple[date, date]:
-    """Return Gregorian start/end dates for a given Jalali month."""
-    start_date = _jalali_to_gregorian(jy, jm, 1)
-    days_in_month = _jalali_month_days(jy, jm)
-    end_date = _jalali_to_gregorian(jy, jm, days_in_month)
-    return start_date, end_date
-
-
-def _get_available_months_for_user(user_id: int, department_id: int, db: Session) -> list[dict]:
-    """Return list of Jalali months that have data for this user."""
-    rows = (
-        db.query(func.distinct(func.strftime('%Y-%m', Timesheet.work_date)))
-        .filter(Timesheet.user_id == user_id)
-        .all()
-    )
-    # For SQLite use substr; for PostgreSQL use to_char
-    # We'll just query all distinct work_dates and convert
+def _available_months_for_department(department_id: int, db: Session) -> list[dict]:
+    """Months that have timesheet data in this department, in Jalali format."""
     all_dates = (
         db.query(Timesheet.work_date)
-        .filter(Timesheet.user_id == user_id)
+        .filter(Timesheet.department_id == department_id)
         .distinct()
         .all()
     )
     months_set = set()
     for (d,) in all_dates:
-        jl = _to_jalali_short(d)
-        months_set.add(jl[:7])  # YYYY/MM
+        jy, jm, _ = _to_jalali_parts(d)
+        months_set.add((jy, jm))
 
-    JALALI_MONTH_NAMES = [
-        '', 'فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور',
-        'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'
+    return [
+        {'value': f'{jy}/{jm:02d}', 'label': jalali_month_label(jy, jm)}
+        for jy, jm in sorted(months_set, reverse=True)
     ]
-    result = []
-    for ym in sorted(months_set, reverse=True):
-        y, m = map(int, ym.split('/'))
-        label = f'{JALALI_MONTH_NAMES[m]} {y}'
-        result.append({'value': ym, 'label': label})
-    return result
 
 
-WEEKDAYS_PERSIAN = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه']
-JALALI_MONTH_NAMES = [
-    '', 'فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور',
-    'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'
-]
+def _timesheets_query(db: Session):
+    return db.query(Timesheet).options(joinedload(Timesheet.task), joinedload(Timesheet.todo))
 
-router = APIRouter(prefix='/analytics', tags=['analytics'])
+
+def _average_user_summary(rows: list[Timesheet]) -> dict:
+    """Average KPI values across users represented in the supplied rows."""
+    rows_by_user: dict[int, list[Timesheet]] = {}
+    for r in rows:
+        rows_by_user.setdefault(r.user_id, []).append(r)
+    if not rows_by_user:
+        return summarize([])
+
+    summaries = [summarize(user_rows) for user_rows in rows_by_user.values()]
+    return {
+        'average_daily_working_hours': round(sum(s['average_daily_working_hours'] for s in summaries) / len(summaries), 2),
+        'average_focus_rate': round(sum(s['average_focus_rate'] for s in summaries) / len(summaries), 2),
+        'productivity_score': round(sum(s['productivity_score'] for s in summaries) / len(summaries), 2),
+        'task_distribution': summarize(rows)['task_distribution'],
+    }
+
+
+def _average_user_breakdown(rows: list[Timesheet], period: str, start: date, end: date) -> list[dict]:
+    base = summarize_by_period(rows, period, start, end)
+    for point in base:
+        bucket_date = date.fromisoformat(point['date'])
+        users: dict[int, list[Timesheet]] = {}
+        for r in rows:
+            if r.work_date == bucket_date:
+                users.setdefault(r.user_id, []).append(r)
+        if not users:
+            point.update({'total_hours': 0, 'average_focus_rate': 0.0, 'productivity_score': 0.0})
+            continue
+        summaries = [summarize(user_rows) for user_rows in users.values()]
+        point.update({
+            'total_hours': round(sum(s['average_daily_working_hours'] for s in summaries) / len(summaries), 2),
+            'average_focus_rate': round(sum(s['average_focus_rate'] for s in summaries) / len(summaries), 2),
+            'productivity_score': round(sum(s['productivity_score'] for s in summaries) / len(summaries), 2),
+        })
+    return base
+
+
+def _comparison_series(personal_breakdown: list[dict], department_breakdown: list[dict]) -> list[dict]:
+    return [
+        {
+            'label': p['label'],
+            'date': p.get('date'),
+            'date_jalali': p.get('date_jalali'),
+            'personal_productivity': p['productivity_score'],
+            'department_productivity': d['productivity_score'],
+            'personal_focus': p['average_focus_rate'],
+            'department_focus': d['average_focus_rate'],
+            'personal_hours': p['total_hours'],
+            'department_hours': d['total_hours'],
+        }
+        for p, d in zip(personal_breakdown, department_breakdown)
+    ]
 
 
 @router.get('/me')
@@ -125,21 +155,11 @@ def my_analytics(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    rows = (
-        db.query(Timesheet)
-        .options(joinedload(Timesheet.task), joinedload(Timesheet.todo))
-        .filter(Timesheet.user_id == user.id)
-        .all()
-    )
-    dept_rows = (
-        db.query(Timesheet)
-        .options(joinedload(Timesheet.task), joinedload(Timesheet.todo))
-        .filter(Timesheet.department_id == user.department_id)
-        .all()
-    )
+    rows = _timesheets_query(db).filter(Timesheet.user_id == user.id).all()
+    dept_rows = _timesheets_query(db).filter(Timesheet.department_id == user.department_id).all()
     return {
         'personal': summarize(rows),
-        'department_average': summarize(dept_rows),
+        'department_average': _average_user_summary(dept_rows),
     }
 
 
@@ -150,22 +170,10 @@ def my_analytics_by_period(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    today = date.today()
-
-    if period == 'daily':
-        start = end = today
-    elif period == 'weekly':
-        start, end = _week_range_for_today()
-    else:  # monthly
-        if month_year:
-            jy, jm = map(int, month_year.split('/'))
-        else:
-            jy, jm, _ = _get_today_jalali()
-        start, end = _month_range(jy, jm)
+    start, end, jy, jm = _range_for_period(period, month_year)
 
     rows = (
-        db.query(Timesheet)
-        .options(joinedload(Timesheet.task), joinedload(Timesheet.todo))
+        _timesheets_query(db)
         .filter(
             Timesheet.user_id == user.id,
             Timesheet.work_date >= start,
@@ -173,31 +181,29 @@ def my_analytics_by_period(
         )
         .all()
     )
+    dept_rows = (
+        _timesheets_query(db)
+        .filter(
+            Timesheet.department_id == user.department_id,
+            Timesheet.work_date >= start,
+            Timesheet.work_date <= end,
+        )
+        .all()
+    )
 
     breakdown = summarize_by_period(rows, period, start, end)
+    department_breakdown = _average_user_breakdown(dept_rows, period, start, end)
 
-    # Jalali display info
-    jy_today, jm_today, jd_today = _get_today_jalali()
-    weekday_name = WEEKDAYS_PERSIAN[(today.weekday() + 1) % 7]
-    month_name = JALALI_MONTH_NAMES[jm_today]
-
-    period_label = ''
-    if period == 'daily':
-        period_label = f'امروز {weekday_name} {jy_today}/{jm_today:02d}/{jd_today:02d}'
-    elif period == 'weekly':
-        jl_start = _to_jalali_short(start)
-        jl_end = _to_jalali_short(end)
-        period_label = f'هفته جاری: {jl_start} تا {jl_end} ({weekday_name})'
-    else:
-        period_label = f'{month_name} {jy_today}'
-
-    available_months = _get_available_months_for_user(user.id, user.department_id, db)
-
+    today = _today()
+    today_jy, today_jm, _ = _to_jalali_parts(today)
     return {
         'period': period,
-        'period_label': period_label,
+        'period_label': _period_label(period, start, end, jy, jm),
         'summary': summarize(rows),
+        'department_summary': _average_user_summary(dept_rows),
         'breakdown': breakdown,
+        'department_breakdown': department_breakdown,
+        'comparison_series': _comparison_series(breakdown, department_breakdown),
         'date_range': {
             'start': start.isoformat(),
             'end': end.isoformat(),
@@ -205,11 +211,12 @@ def my_analytics_by_period(
             'end_jalali': _to_jalali_short(end),
         },
         'today_info': {
-            'jalali': f'{jy_today}/{jm_today:02d}/{jd_today:02d}',
-            'weekday': weekday_name,
-            'month_name': month_name,
+            'jalali': _to_jalali_short(today),
+            'weekday': WEEKDAYS_PERSIAN[(today.weekday() + 1) % 7],
+            'month_name': JALALI_MONTHS[today_jm - 1],
+            'year': today_jy,
         },
-        'available_months': available_months,
+        'available_months': _available_months_for_department(user.department_id, db),
     }
 
 
@@ -218,10 +225,7 @@ def department_analytics(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),
 ):
-    q = db.query(Timesheet).options(
-        joinedload(Timesheet.task),
-        joinedload(Timesheet.todo),
-    )
+    q = _timesheets_query(db)
     if user.role == RoleEnum.MANAGER:
         q = q.filter(Timesheet.department_id == user.department_id)
     return summarize(q.all())
@@ -235,45 +239,43 @@ def department_analytics_by_period(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),
 ):
-    today = date.today()
+    start, end, jy, jm = _range_for_period(period, month_year)
 
-    if period == 'daily':
-        start = end = today
-    elif period == 'weekly':
-        start, end = _week_range_for_today()
-    else:
-        if month_year:
-            jy, jm = map(int, month_year.split('/'))
-        else:
-            jy, jm, _ = _get_today_jalali()
-        start, end = _month_range(jy, jm)
-
-    q = db.query(Timesheet).options(
-        joinedload(Timesheet.task),
-        joinedload(Timesheet.todo),
-    ).filter(
+    q = _timesheets_query(db).filter(
         Timesheet.work_date >= start,
         Timesheet.work_date <= end,
     )
 
+    selected_department_id = user.department_id
     if user.role == RoleEnum.MANAGER:
         q = q.filter(Timesheet.department_id == user.department_id)
     elif department_id is not None:
         if not db.get(Department, department_id):
             raise HTTPException(404, 'Department not found')
+        selected_department_id = department_id
         q = q.filter(Timesheet.department_id == department_id)
 
     rows = q.all()
     breakdown = summarize_by_period(rows, period, start, end)
     return {
         'period': period,
+        'period_label': _period_label(period, start, end, jy, jm),
         'summary': summarize(rows),
         'breakdown': breakdown,
+        'date_range': {
+            'start': start.isoformat(),
+            'end': end.isoformat(),
+            'start_jalali': _to_jalali_short(start),
+            'end_jalali': _to_jalali_short(end),
+        },
+        'available_months': _available_months_for_department(selected_department_id, db) if selected_department_id else [],
     }
 
 
 @router.get('/department/employees')
 def department_employee_breakdown(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=1000, ge=1, le=1000),
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),
 ):
@@ -286,12 +288,7 @@ def department_employee_breakdown(
 
     result = []
     for u in users:
-        rows = (
-            db.query(Timesheet)
-            .options(joinedload(Timesheet.task), joinedload(Timesheet.todo))
-            .filter(Timesheet.user_id == u.id)
-            .all()
-        )
+        rows = _timesheets_query(db).filter(Timesheet.user_id == u.id).all()
         kpi = summarize(rows)
         result.append({
             'user_id': u.id,
@@ -301,4 +298,15 @@ def department_employee_breakdown(
             **kpi,
         })
     result.sort(key=lambda x: x['productivity_score'], reverse=True)
-    return {'total_employees': len(users), 'ranking': result}
+
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    paged = result[start_idx:end_idx]
+    return {
+        'total_employees': len(users),
+        'total': len(result),
+        'page': page,
+        'page_size': page_size,
+        'total_pages': max((len(result) + page_size - 1) // page_size, 1),
+        'ranking': paged,
+    }

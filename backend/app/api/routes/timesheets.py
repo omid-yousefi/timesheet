@@ -1,6 +1,6 @@
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.db.session import get_db
@@ -43,13 +43,29 @@ def create_timesheet(payload: TimesheetCreate, db: Session = Depends(get_db), us
     db.refresh(row)
     return row
 
-@router.get('/history', response_model=list[TimesheetOutWithRelations])
-def history(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    return (
+@router.get('/history')
+def history(
+    paginated: bool = Query(default=False),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=15, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    q = (
         db.query(Timesheet)
         .options(joinedload(Timesheet.task), joinedload(Timesheet.todo))
         .filter_by(user_id=user.id)
         .order_by(Timesheet.work_date.desc(), Timesheet.start_time.desc())
-        .limit(200)
-        .all()
     )
+    if not paginated:
+        return q.limit(200).all()
+
+    total = q.count()
+    items = q.offset((page - 1) * page_size).limit(page_size).all()
+    return {
+        'items': items,
+        'total': total,
+        'page': page,
+        'page_size': page_size,
+        'total_pages': max((total + page_size - 1) // page_size, 1),
+    }
