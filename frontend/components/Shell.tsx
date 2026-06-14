@@ -41,8 +41,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   if (!ready) {
     return (
-      <div className="grid min-h-screen place-items-center">
-        <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-accent" />
+      <div className="grid min-h-screen place-items-center bg-slate-50 p-4 dark:bg-slate-950">
+        <div className="animate-spin h-10 w-10 border-4 border-accent border-t-transparent rounded-full" />
       </div>
     );
   }
@@ -50,48 +50,73 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const isAdmin = me?.role === 'ADMIN';
   const isManager = me?.role === 'MANAGER';
 
+  const navLinks = [
+    { href: '/dashboard', label: 'داشبورد' },
+    { href: '/logs', label: 'ثبت گزارش' },
+    ...(isAdmin ? [{ href: '/admin', label: 'پنل مدیریت' }] : []),
+    ...(isAdmin || isManager ? [{ href: '/manager', label: 'مدیریت تیم' }] : []),
+  ];
+
   return (
-    <div className="mx-auto max-w-7xl p-4 md:p-8">
-      <aside className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white p-3 shadow-sm dark:bg-slate-900">
-        <b className="text-accent">سامانه بهره‌وری</b>
-
-        <nav className="flex flex-wrap gap-3 text-sm text-slate-600 dark:text-slate-300">
-          <Link href="/dashboard" className={pathname === '/dashboard' ? 'font-semibold text-accent' : ''}>
-            داشبورد
-          </Link>
-          <Link href="/logs" className={pathname === '/logs' ? 'font-semibold text-accent' : ''}>
-            ثبت گزارش
-          </Link>
-          {(isManager || isAdmin) && (
-            <Link href="/manager" className={pathname === '/manager' ? 'font-semibold text-accent' : ''}>
-              مدیر
+    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      {/* Top navigation */}
+      <header className="sticky top-0 z-50 border-b border-slate-200 bg-white/80 backdrop-blur dark:border-slate-800 dark:bg-slate-900/80">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-6">
+            <Link href="/dashboard" className="text-lg font-bold text-accent">
+              تایم‌شیت
             </Link>
-          )}
-          {isAdmin && (
-            <Link href="/admin" className={pathname === '/admin' ? 'font-semibold text-accent' : ''}>
-              ادمین
-            </Link>
-          )}
-        </nav>
-
-        <div className="flex items-center gap-3 text-xs text-slate-500">
-          {me && (
-            <span>
-              {me.full_name}
-              {ROLE_LABELS[me.role] ? ` · ${ROLE_LABELS[me.role]}` : ''}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={logout}
-            className="rounded-lg border border-slate-200 px-2 py-1 transition hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
-          >
-            خروج
-          </button>
+            <nav className="hidden md:flex gap-4">
+              {navLinks.map(link => (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className={`text-sm transition ${
+                    pathname === link.href
+                      ? 'text-accent font-medium'
+                      : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100'
+                  }`}
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </nav>
+          </div>
+          <div className="flex items-center gap-3">
+            {me && (
+              <span className="text-sm text-slate-500">
+                {me.full_name}
+                <span className="mr-1 text-xs text-slate-400">({ROLE_LABELS[me.role] || me.role})</span>
+              </span>
+            )}
+            <button
+              onClick={logout}
+              className="text-sm text-red-500 hover:text-red-600 transition"
+            >
+              خروج
+            </button>
+          </div>
         </div>
-      </aside>
 
-      {children}
+        {/* Mobile nav */}
+        <nav className="md:hidden flex gap-1 overflow-x-auto px-4 pb-2">
+          {navLinks.map(link => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap transition ${
+                pathname === link.href
+                  ? 'bg-accent text-white'
+                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+              }`}
+            >
+              {link.label}
+            </Link>
+          ))}
+        </nav>
+      </header>
+
+      <main className="mx-auto max-w-7xl p-4 md:p-6">{children}</main>
     </div>
   );
 }
