@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Shell } from "@/components/Shell";
 import { api } from "@/lib/api";
-import { jalaliStrToGregorianStr, todayJalaliStr } from "@/lib/jalali";
+import { todayJalaliStr } from "@/lib/jalali";
 
 // Persian (Jalali) calendar date picker
 import DatePicker from "react-multi-date-picker";
@@ -32,7 +32,8 @@ interface Task {
 
 interface Report {
   id: number;
-  work_date: string;
+  work_date: string; // Now Jalali "1404/03/24" from backend
+  work_date_jalali?: string;
   task_id: number;
   todo_id: number;
   start_time: string;
@@ -87,7 +88,8 @@ export default function ManagerReportsPage() {
   const [form, setForm] = useState<EditForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
-  const gregorianDate = jalaliDate ? jalaliStrToGregorianStr(jalaliDate) : "";
+  // Backend now accepts Jalali directly, no conversion needed
+  const queryDate = jalaliDate;
 
   // Load the manager's editable employees once.
   useEffect(() => {
@@ -97,7 +99,7 @@ export default function ManagerReportsPage() {
   }, []);
 
   const loadReports = useCallback(async () => {
-    if (!selectedEmployee || !gregorianDate) {
+    if (!selectedEmployee || !queryDate) {
       setReports([]);
       return;
     }
@@ -107,7 +109,7 @@ export default function ManagerReportsPage() {
       const [tasksData, reportsData] = await Promise.all([
         api<Task[]>(`/manager/employees/${selectedEmployee}/tasks`),
         api<Report[]>(
-          `/manager/employees/${selectedEmployee}/reports?work_date=${gregorianDate}`,
+          `/manager/employees/${selectedEmployee}/reports?work_date=${encodeURIComponent(queryDate)}`,
         ),
       ]);
       setTasks(tasksData);
@@ -121,7 +123,7 @@ export default function ManagerReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedEmployee, gregorianDate]);
+  }, [selectedEmployee, queryDate]);
 
   useEffect(() => {
     loadReports();
@@ -189,7 +191,7 @@ export default function ManagerReportsPage() {
     }
 
     const body = JSON.stringify({
-      work_date: gregorianDate,
+      work_date: jalaliDate, // Send Jalali directly
       task_id: Number(form.task_id),
       todo_id: autoTodoId,
       start_time: form.start_time,

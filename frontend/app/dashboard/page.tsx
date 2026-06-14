@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Shell } from "@/components/Shell";
 import { KpiCard } from "@/components/KpiCard";
-import { PeriodTrend, TaskPie, Compare } from "@/components/Charts";
+import { PeriodTrend, TaskPie } from "@/components/Charts";
 import { api } from "@/lib/api";
 import { format } from "date-fns-jalali";
 
@@ -280,16 +280,6 @@ export default function Dashboard() {
           <TaskPie items={taskDistribution} />
         </section>
 
-        {/* Comparison */}
-        <section className="card">
-          <Compare
-            series={periodData?.comparison_series ?? []}
-            personalHours={personalSummary.average_daily_working_hours}
-            deptHours={departmentSummary.average_daily_working_hours}
-            personalFocus={personalSummary.average_focus_rate}
-            deptFocus={departmentSummary.average_focus_rate}
-          />
-        </section>
       </div>
     </Shell>
   );

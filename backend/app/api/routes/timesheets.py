@@ -10,12 +10,23 @@ from app.models.task import Task, TaskTodo
 from app.models.timesheet import Timesheet
 from app.schemas.timesheet import TimesheetCreate, TimesheetOutWithRelations
 from app.services.audit import audit
+from app.services.jalali import parse_jalali_str
 
 router = APIRouter(prefix='/timesheets', tags=['timesheets'])
 
+def parse_date_param(date_str: str | None) -> date | None:
+    if date_str is None:
+        return None
+    try:
+        if '/' in date_str:
+            first = int(date_str.split('/')[0])
+            if 1300 < first < 1700:
+                return parse_jalali_str(date_str)
+        return date.fromisoformat(date_str)
+    except Exception:
+        raise HTTPException(400, f'Invalid date: {date_str}')
+
 def ensure_same_day_editable(work_date, user: User):
-    # Managers and admins may create/edit reports for any date (e.g. correcting
-    # an employee's past day). Regular employees are restricted to "today" only.
     if user.role in (RoleEnum.ADMIN, RoleEnum.MANAGER):
         return
     now = datetime.now(ZoneInfo(settings.timezone))
@@ -50,22 +61,22 @@ def history(
     paginated: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=15, ge=1, le=100),
-    work_date: date | None = Query(
+    work_date: str | None = Query(
         default=None,
-        description='Filter by a single Gregorian date (YYYY-MM-DD). The UI sends '
-                    'the Jalali date converted to Gregorian.',
+        description='Filter by Jalali date YYYY/MM/DD',
     ),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    work_date_parsed = parse_date_param(work_date)
     q = (
         db.query(Timesheet)
         .options(joinedload(Timesheet.task), joinedload(Timesheet.todo))
         .filter_by(user_id=user.id)
         .order_by(Timesheet.work_date.desc(), Timesheet.start_time.desc())
     )
-    if work_date is not None:
-        q = q.filter(Timesheet.work_date == work_date)
+    if work_date_parsed is not None:
+        q = q.filter(Timesheet.work_date == work_date_parsed)
     if not paginated:
         return q.limit(200).all()
 

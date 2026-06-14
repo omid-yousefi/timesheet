@@ -11,10 +11,27 @@ from app.models.timesheet import Timesheet
 from app.schemas.timesheet import TimesheetCreate, TimesheetOutWithRelations
 from app.services.audit import audit
 from app.services.kpi import summarize
+from app.services.jalali import parse_jalali_str
 
 router = APIRouter(prefix='/manager', tags=['manager'])
 
 MANAGER_ROLES = (RoleEnum.ADMIN, RoleEnum.MANAGER)
+
+
+def _parse_date_param(date_str: str) -> date:
+    """Accept Jalali '1404/03/24' or Gregorian '2025-06-14'"""
+    if not date_str:
+        raise HTTPException(400, 'work_date required')
+    try:
+        # Jalali detection
+        if '/' in date_str:
+            first = int(date_str.split('/')[0])
+            if 1300 < first < 1700:
+                return parse_jalali_str(date_str)
+        # Gregorian
+        return date.fromisoformat(date_str)
+    except Exception:
+        raise HTTPException(400, f'Invalid date format: {date_str}. Use Jalali YYYY/MM/DD')
 
 
 def _to_minutes(t) -> int:
@@ -22,10 +39,6 @@ def _to_minutes(t) -> int:
 
 
 def _ensure_can_manage(manager: User, target: User) -> None:
-    """A manager may only act on active employees inside their own department.
-
-    Admins are not restricted to a single department.
-    """
     if not target.is_active:
         raise HTTPException(404, 'Employee not found')
     if manager.role == RoleEnum.MANAGER and target.department_id != manager.department_id:
@@ -42,7 +55,7 @@ def _get_target_user(db: Session, manager: User, user_id: int) -> User:
 
 @router.get('/team')
 def team(db: Session = Depends(get_db), manager: User = Depends(require_roles(*MANAGER_ROLES))):
-    users_q = db.query(User).filter(User.is_active == True)  # noqa: E712
+    users_q = db.query(User).filter(User.is_active == True)
     if manager.role == RoleEnum.MANAGER:
         users_q = users_q.filter(User.department_id == manager.department_id)
     users = users_q.all()
@@ -70,7 +83,7 @@ def list_department_employees(
     Managers see only their own department; admins see everyone. The manager's
     own account and admin accounts are excluded from the editable list.
     """
-    q = db.query(User).filter(User.is_active == True)  # noqa: E712
+    q = db.query(User).filter(User.is_active == True)
     if manager.role == RoleEnum.MANAGER:
         q = q.filter(User.department_id == manager.department_id)
     q = q.filter(User.role != RoleEnum.ADMIN)
@@ -90,16 +103,17 @@ def list_department_employees(
 @router.get('/employees/{user_id}/reports', response_model=list[TimesheetOutWithRelations])
 def employee_reports_for_date(
     user_id: int,
-    work_date: date = Query(..., description='Gregorian date (YYYY-MM-DD); the UI converts the Jalali date.'),
+    work_date: str = Query(..., description='Jalali date YYYY/MM/DD, e.g. 1404/03/24'),
     db: Session = Depends(get_db),
     manager: User = Depends(require_roles(*MANAGER_ROLES)),
 ):
     """All of one employee's timesheet entries on a single day."""
+    work_date_parsed = _parse_date_param(work_date)
     target = _get_target_user(db, manager, user_id)
     rows = (
         db.query(Timesheet)
         .options(joinedload(Timesheet.task), joinedload(Timesheet.todo))
-        .filter(Timesheet.user_id == target.id, Timesheet.work_date == work_date)
+        .filter(Timesheet.user_id == target.id, Timesheet.work_date == work_date_parsed)
         .order_by(Timesheet.start_time.asc())
         .all()
     )

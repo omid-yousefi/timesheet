@@ -1,9 +1,11 @@
 # Functional Fixes & Improvements — Summary
 
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 The UI was kept intact; only behavior/integration was changed. All displayed dates
 use the Persian (Jalali) calendar.
 
 ## 1. Manager capability — view & edit employees' daily reports
+
 **New page:** `frontend/app/manager/reports/page.tsx` (linked from the nav as
 “ویرایش گزارش‌ها” for managers & admins in `components/Shell.tsx`).
 
@@ -13,6 +15,7 @@ use the Persian (Jalali) calendar.
   (inline forms, 24-hour times, auto-derived activity description).
 
 **Backend (`backend/app/api/routes/manager.py`):**
+
 - `GET  /manager/employees` — department-scoped employee list (admins see all,
   admin accounts excluded).
 - `GET  /manager/employees/{id}/reports?work_date=YYYY-MM-DD` — one day's entries.
@@ -24,7 +27,9 @@ use the Persian (Jalali) calendar.
   validate task/todo, prevent overlapping time intervals, and write audit logs.
 
 ## 2. Daily report submission — no date field, today only
+
 `frontend/app/logs/page.tsx`:
+
 - Removed the editable date picker from the submission form.
 - Shows **today's Jalali date in bold/highlighted** (e.g. «شنبه ۲۴ خرداد ۱۴۰۵»).
 - Submission always uses today's date.
@@ -34,16 +39,20 @@ restriction still applies to employees; **managers and admins bypass it** so the
 can correct past days (requirement #1).
 
 ## 3. Time format — 24-hour
+
 Start/end times use native `type="time"` with `step={60}` (24-hour values such as
 `16:00`) on both the submission form and the manager edit form.
 
 ## 4. Report history — pagination + Jalali date filter
+
 `frontend/app/logs/page.tsx` + `GET /timesheets/history`:
+
 - Pagination retained.
 - Added a **Jalali date filter** (picker → converted to Gregorian → backend
   `?work_date=` filter). “Clear filter” returns to all entries.
 
 ## 5. Dashboard improvements
+
 - **Interactive trend chart:** `components/Charts.tsx` `PeriodTrend` was rewritten
   from a static SVG to a recharts `LineChart` with hover tooltips showing each
   point's value.
@@ -59,6 +68,7 @@ Start/end times use native `type="time"` with `step={60}` (24-hour values such a
   helpers. `1405/03/24` now round-trips correctly (no more `1405/03/25`).
 
 ## Files
+
 - **Modified:** `backend/app/api/routes/manager.py`,
   `backend/app/api/routes/timesheets.py`, `frontend/app/dashboard/page.tsx`,
   `frontend/app/logs/page.tsx`, `frontend/components/Charts.tsx`,
@@ -68,6 +78,7 @@ Start/end times use native `type="time"` with `step={60}` (24-hour values such a
   logs, dashboard and manager pages to keep conversions consistent).
 
 ## Verification
+
 - `npm run build` (Next.js) passes type-checking with all routes generated.
 - Backend imports cleanly; manager CRUD, department scoping, date filtering, and
   the same-day bypass were exercised via a `TestClient` run and all pass.

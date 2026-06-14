@@ -10,14 +10,16 @@ from app.models.user import User, RoleEnum
 from app.models.timesheet import Timesheet
 from app.models.department import Department
 from app.services.kpi import (
+    summarize,
+    summarize_by_period,
+)
+from app.services.jalali import (
     JALALI_MONTHS,
     WEEKDAYS_PERSIAN,
     jalali_month_label,
     jalali_month_range,
-    summarize,
-    summarize_by_period,
-    _to_jalali_parts,
-    _to_jalali_short,
+    to_jalali_parts,
+    to_jalali_short,
 )
 
 router = APIRouter(prefix='/analytics', tags=['analytics'])
@@ -36,10 +38,11 @@ def _week_range_for(day: date) -> tuple[date, date]:
 
 def _parse_month_year(month_year: str | None, fallback_day: date) -> tuple[int, int]:
     if not month_year:
-        jy, jm, _ = _to_jalali_parts(fallback_day)
+        jy, jm, _ = to_jalali_parts(fallback_day)
         return jy, jm
     try:
-        jy, jm = map(int, month_year.split('/'))
+        jy_str, jm_str = month_year.replace('-', '/').split('/')
+        jy, jm = int(jy_str), int(jm_str)
     except ValueError:
         raise HTTPException(422, 'month_year must be in Jalali YYYY/MM format')
     if jm < 1 or jm > 12:
@@ -64,13 +67,13 @@ def _period_label(period: str, start: date, end: date, jy: int | None = None, jm
     weekday_name = WEEKDAYS_PERSIAN[(today.weekday() + 2) % 7]
 
     if period == 'daily':
-        return f'امروز {weekday_name} {_to_jalali_short(today)}'
+        return f'امروز {weekday_name} {to_jalali_short(today)}'
     if period == 'weekly':
-        return f'هفته جاری: {_to_jalali_short(start)} تا {_to_jalali_short(end)}'
+        return f'هفته جاری: {to_jalali_short(start)} تا {to_jalali_short(end)}'
 
     if jy is None or jm is None:
-        jy, jm, _ = _to_jalali_parts(start)
-    return f'{jalali_month_label(jy, jm)}: {_to_jalali_short(start)} تا {_to_jalali_short(end)}'
+        jy, jm, _ = to_jalali_parts(start)
+    return f'{jalali_month_label(jy, jm)}: {to_jalali_short(start)} تا {to_jalali_short(end)}'
 
 
 def _available_months_for_department(department_id: int, db: Session) -> list[dict]:
@@ -83,7 +86,7 @@ def _available_months_for_department(department_id: int, db: Session) -> list[di
     )
     months_set = set()
     for (d,) in all_dates:
-        jy, jm, _ = _to_jalali_parts(d)
+        jy, jm, _ = to_jalali_parts(d)
         months_set.add((jy, jm))
 
     return [
@@ -166,7 +169,7 @@ def my_analytics(
 @router.get('/me/period')
 def my_analytics_by_period(
     period: str = Query(default='daily', regex='^(daily|weekly|monthly)$'),
-    month_year: str | None = Query(default=None, description='Jalali month YYYY/MM, e.g. 1405/04'),
+    month_year: str | None = Query(default=None, description='Jalali month YYYY/MM, e.g. 1404/03'),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -195,7 +198,7 @@ def my_analytics_by_period(
     department_breakdown = _average_user_breakdown(dept_rows, period, start, end)
 
     today = _today()
-    today_jy, today_jm, _ = _to_jalali_parts(today)
+    today_jy, today_jm, _ = to_jalali_parts(today)
     return {
         'period': period,
         'period_label': _period_label(period, start, end, jy, jm),
@@ -207,11 +210,11 @@ def my_analytics_by_period(
         'date_range': {
             'start': start.isoformat(),
             'end': end.isoformat(),
-            'start_jalali': _to_jalali_short(start),
-            'end_jalali': _to_jalali_short(end),
+            'start_jalali': to_jalali_short(start),
+            'end_jalali': to_jalali_short(end),
         },
         'today_info': {
-            'jalali': _to_jalali_short(today),
+            'jalali': to_jalali_short(today),
             'weekday': WEEKDAYS_PERSIAN[(today.weekday() + 2) % 7],
             'month_name': JALALI_MONTHS[today_jm - 1],
             'year': today_jy,
@@ -225,7 +228,14 @@ def department_analytics(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.MANAGER)),
 ):
-    q = _timesheets_query(db)
+    
+    today = _today()
+    start, end = _week_range_for(today)   # شنبه تا جمعه
+
+    q = _timesheets_query(db).filter(
+        Timesheet.work_date >= start,
+        Timesheet.work_date <= end,
+    )
     if user.role == RoleEnum.MANAGER:
         q = q.filter(Timesheet.department_id == user.department_id)
     return summarize(q.all())
@@ -265,8 +275,8 @@ def department_analytics_by_period(
         'date_range': {
             'start': start.isoformat(),
             'end': end.isoformat(),
-            'start_jalali': _to_jalali_short(start),
-            'end_jalali': _to_jalali_short(end),
+            'start_jalali': to_jalali_short(start),
+            'end_jalali': to_jalali_short(end),
         },
         'available_months': _available_months_for_department(selected_department_id, db) if selected_department_id else [],
     }

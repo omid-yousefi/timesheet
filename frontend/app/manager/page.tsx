@@ -2,7 +2,6 @@
 import { useState, useEffect } from 'react';
 import { Shell } from '@/components/Shell';
 import { KpiCard } from '@/components/KpiCard';
-import { Compare } from '@/components/Charts';
 import { api } from '@/lib/api';
 
 interface EmployeeRanking {
@@ -94,14 +93,7 @@ export default function Manager() {
           <KpiCard title="بهره‌وری" value={avgProductivity} />
         </section>
 
-        <section className="card">
-          <Compare
-            personalHours={Number(avgHours)}
-            deptHours={Number(avgHours)}
-            personalFocus={Number(avgFocus)}
-            deptFocus={Number(avgFocus)}
-          />
-        </section>
+        
 
         {/* Employee ranking table with pagination */}
         <div className="card overflow-x-auto">
