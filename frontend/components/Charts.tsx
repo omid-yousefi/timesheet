@@ -8,15 +8,35 @@ import {
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#14b8a6'];
 
 interface TrendData {
+  /** Pre-formatted Jalali label produced by the backend (timezone-safe). */
   label: string;
   hours: number;
   focus: number;
   productivity: number;
+  /** Department averages for the same day (optional). */
+  deptHours?: number;
+  deptFocus?: number;
+  deptProductivity?: number;
 }
 
-/** Trend chart — works for daily, weekly, and monthly periods */
+const TREND_METRICS = {
+  hours: { personalKey: 'hours', deptKey: 'deptHours', label: 'ساعت کاری', unit: ' ساعت' },
+  focus: { personalKey: 'focus', deptKey: 'deptFocus', label: 'نرخ تمرکز', unit: '٪' },
+  productivity: { personalKey: 'productivity', deptKey: 'deptProductivity', label: 'بهره‌وری', unit: '' },
+} as const;
+
+/**
+ * Interactive trend chart (recharts) — hover shows the exact value for every
+ * point. Plots the user's metric AND the department average for the same metric
+ * on a single line chart. Works for daily, weekly and monthly periods.
+ *
+ * The X-axis labels are the backend-provided Jalali strings, so dates are never
+ * shifted by browser-timezone parsing.
+ */
 export function PeriodTrend({ data = [], period = 'daily' }: { data?: TrendData[]; period?: string }) {
-  const [activeMetric, setActiveMetric] = useState<'hours' | 'focus' | 'productivity'>('hours');
+  const [activeMetric, setActiveMetric] = useState<keyof typeof TREND_METRICS>('hours');
+
+  const periodTitle = period === 'daily' ? 'روزانه' : period === 'weekly' ? 'هفتگی' : 'ماهانه';
 
   if (data.length === 0) {
     const periodText = period === 'daily' ? 'امروز' : period === 'weekly' ? 'این هفته' : 'این ماه';
@@ -30,23 +50,24 @@ export function PeriodTrend({ data = [], period = 'daily' }: { data?: TrendData[
     );
   }
 
-  const metricConfig = {
-    hours: { key: 'hours' as const, label: 'ساعت کاری', color: '#6366f1', unit: ' ساعت' },
-    focus: { key: 'focus' as const, label: 'نرخ تمرکز', color: '#10b981', unit: '٪' },
-    productivity: { key: 'productivity' as const, label: 'بهره‌وری', color: '#f59e0b', unit: '' },
-  };
+  const metric = TREND_METRICS[activeMetric];
+  const personalName = `شما (${metric.label})`;
+  const deptName = `میانگین دپارتمان`;
 
-  const metric = metricConfig[activeMetric];
-  const maxVal = Math.max(...data.map(d => d[metric.key]), 1);
+  const hasDept = data.some(d => d[metric.deptKey] !== undefined && d[metric.deptKey] !== null);
+
+  const chartData = data.map(d => ({
+    label: d.label,
+    [personalName]: d[metric.personalKey] ?? 0,
+    ...(hasDept ? { [deptName]: d[metric.deptKey] ?? 0 } : {}),
+  }));
 
   return (
     <div className="card">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="font-medium">
-          روند عملکرد ({period === 'daily' ? 'روزانه' : period === 'weekly' ? 'هفتگی' : 'ماهانه'})
-        </h2>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h2 className="font-medium">روند عملکرد ({periodTitle})</h2>
         <div className="flex gap-1">
-          {(Object.keys(metricConfig) as Array<keyof typeof metricConfig>).map(key => (
+          {(Object.keys(TREND_METRICS) as Array<keyof typeof TREND_METRICS>).map(key => (
             <button
               key={key}
               className={`px-2 py-1 rounded text-xs transition ${
@@ -56,67 +77,49 @@ export function PeriodTrend({ data = [], period = 'daily' }: { data?: TrendData[
               }`}
               onClick={() => setActiveMetric(key)}
             >
-              {metricConfig[key].label}
+              {TREND_METRICS[key].label}
             </button>
           ))}
         </div>
       </div>
       <ResponsiveContainer width="100%" height={280}>
-        <div className="relative">
-          <svg viewBox={`0 0 500 300`} className="w-full h-full">
-            {/* Y-axis labels */}
-            {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => (
-              <text key={i} x="8" y={290 - pct * 270} className="text-[9px] fill-slate-400" textAnchor="start">
-                {Math.round(pct * maxVal * 1.2)}
-              </text>
-            ))}
-            {/* Grid lines */}
-            {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => (
-              <line key={i} x1="40" y1={290 - pct * 270} x2="490" y2={290 - pct * 270} stroke="rgba(148,163,184,0.1)" />
-            ))}
-            {/* Area fill */}
-            <path
-              d={`M${data.map((d, i) => `${40 + (i * 450 / Math.max(data.length - 1, 1))} ${290 - (d[metric.key] / (maxVal * 1.2)) * 270}`).join(' L')} L${40 + ((data.length - 1) * 450 / Math.max(data.length - 1, 1))} 290 L40 290 Z`}
-              fill={`url(#grad-${activeMetric})`}
-              opacity="0.3"
+        <LineChart data={chartData} margin={{ top: 10, right: 16, left: 8, bottom: 34 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.18)" />
+          <XAxis
+            dataKey="label"
+            tick={{ fontSize: 10 }}
+            angle={-25}
+            textAnchor="end"
+            height={58}
+            interval="preserveStartEnd"
+          />
+          <YAxis tick={{ fontSize: 11 }} width={42} />
+          <Tooltip
+            formatter={(value: number, name: string) => [`${value}${metric.unit}`, name]}
+            labelStyle={{ direction: 'rtl' }}
+            contentStyle={{ borderRadius: 8, border: '1px solid rgba(148, 163, 184, 0.2)', fontSize: 12, direction: 'rtl' }}
+          />
+          <Legend verticalAlign="top" height={28} />
+          <Line
+            type="monotone"
+            dataKey={personalName}
+            stroke="#6366f1"
+            strokeWidth={2}
+            dot={{ r: 3 }}
+            activeDot={{ r: 6 }}
+          />
+          {hasDept && (
+            <Line
+              type="monotone"
+              dataKey={deptName}
+              stroke="#10b981"
+              strokeWidth={2}
+              strokeDasharray="5 4"
+              dot={{ r: 3 }}
+              activeDot={{ r: 6 }}
             />
-            {/* Line */}
-            <polyline
-              fill="none"
-              stroke={metric.color}
-              strokeWidth="2"
-              points={data.map((d, i) => `${40 + (i * 450 / Math.max(data.length - 1, 1))},${290 - (d[metric.key] / (maxVal * 1.2)) * 270}`).join(' ')}
-            />
-            {/* Dots */}
-            {data.map((d, i) => (
-              <circle
-                key={i}
-                cx={40 + (i * 450 / Math.max(data.length - 1, 1))}
-                cy={290 - (d[metric.key] / (maxVal * 1.2)) * 270}
-                r="3"
-                fill={metric.color}
-              />
-            ))}
-            {/* X-axis labels */}
-            {data.map((d, i) => (
-              <text
-                key={i}
-                x={40 + (i * 450 / Math.max(data.length - 1, 1))}
-                y="298"
-                className="text-[9px] fill-slate-500 dark:fill-slate-400"
-                textAnchor="middle"
-              >
-                {d.label}
-              </text>
-            ))}
-            <defs>
-              <linearGradient id={`grad-${activeMetric}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={metric.color} stopOpacity={0.3} />
-                <stop offset="95%" stopColor={metric.color} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-          </svg>
-        </div>
+          )}
+        </LineChart>
       </ResponsiveContainer>
     </div>
   );

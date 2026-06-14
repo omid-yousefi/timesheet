@@ -160,13 +160,23 @@ export default function Dashboard() {
   const departmentSummary =
     periodData?.department_summary ?? data.department_average;
 
+  // Merge personal breakdown with the department breakdown for the same day so
+  // the trend chart can show both lines. `label` comes straight from the backend
+  // (already correct Jalali), which is the fix for the previously shifted dates.
+  const deptBreakdown = periodData?.department_breakdown ?? [];
   const trendData =
-    periodData?.breakdown?.map((item) => ({
-      label: item.label,
-      hours: item.total_hours,
-      focus: item.average_focus_rate,
-      productivity: item.productivity_score,
-    })) ?? [];
+    periodData?.breakdown?.map((item, i) => {
+      const dept = deptBreakdown[i];
+      return {
+        label: item.label,
+        hours: item.total_hours,
+        focus: item.average_focus_rate,
+        productivity: item.productivity_score,
+        deptHours: dept?.total_hours,
+        deptFocus: dept?.average_focus_rate,
+        deptProductivity: dept?.productivity_score,
+      };
+    }) ?? [];
 
   const taskDistribution =
     personalSummary.task_distribution?.length > 0

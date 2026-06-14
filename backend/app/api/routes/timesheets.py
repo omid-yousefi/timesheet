@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
@@ -13,11 +13,13 @@ from app.services.audit import audit
 
 router = APIRouter(prefix='/timesheets', tags=['timesheets'])
 
-def ensure_same_day_editable(payload: TimesheetCreate, user: User):
-    if user.role == RoleEnum.ADMIN:
+def ensure_same_day_editable(work_date, user: User):
+    # Managers and admins may create/edit reports for any date (e.g. correcting
+    # an employee's past day). Regular employees are restricted to "today" only.
+    if user.role in (RoleEnum.ADMIN, RoleEnum.MANAGER):
         return
     now = datetime.now(ZoneInfo(settings.timezone))
-    if payload.work_date != now.date() or now.time() > time(23, 59):
+    if work_date != now.date() or now.time() > time(23, 59):
         raise HTTPException(403, 'Submission deadline passed; records are read-only')
 
 def to_minutes(t):
@@ -25,7 +27,7 @@ def to_minutes(t):
 
 @router.post('', response_model=TimesheetOutWithRelations)
 def create_timesheet(payload: TimesheetCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    ensure_same_day_editable(payload, user)
+    ensure_same_day_editable(payload.work_date, user)
     task = db.get(Task, payload.task_id)
     todo = db.get(TaskTodo, payload.todo_id)
     if not task or task.department_id != user.department_id or not todo or todo.task_id != task.id:
@@ -48,6 +50,11 @@ def history(
     paginated: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=15, ge=1, le=100),
+    work_date: date | None = Query(
+        default=None,
+        description='Filter by a single Gregorian date (YYYY-MM-DD). The UI sends '
+                    'the Jalali date converted to Gregorian.',
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -57,6 +64,8 @@ def history(
         .filter_by(user_id=user.id)
         .order_by(Timesheet.work_date.desc(), Timesheet.start_time.desc())
     )
+    if work_date is not None:
+        q = q.filter(Timesheet.work_date == work_date)
     if not paginated:
         return q.limit(200).all()
 

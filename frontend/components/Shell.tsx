@@ -55,6 +55,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
     { href: '/logs', label: 'ثبت گزارش' },
     ...(isAdmin ? [{ href: '/admin', label: 'پنل مدیریت' }] : []),
     ...(isAdmin || isManager ? [{ href: '/manager', label: 'مدیریت تیم' }] : []),
+    ...(isAdmin || isManager
+      ? [{ href: '/manager/reports', label: 'ویرایش گزارش‌ها' }]
+      : []),
   ];
 
   return (

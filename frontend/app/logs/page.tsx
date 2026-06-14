@@ -2,13 +2,17 @@
 import { useState, useEffect, useMemo } from "react";
 import { Shell } from "@/components/Shell";
 import { api } from "@/lib/api";
-import { format } from "date-fns-jalali";
+import {
+  gregorianStrToJalaliStr,
+  jalaliStrToGregorianStr,
+  todayGregorianStr,
+  todayJalaliLong,
+} from "@/lib/jalali";
 
-// Persian date picker imports
+// Persian date picker (used only for the history *filter*, not for submission)
 import DatePicker from "react-multi-date-picker";
 import DateObject from "react-date-object";
 import persian from "react-date-object/calendars/persian";
-import gregorian from "react-date-object/calendars/gregorian";
 import persian_fa from "react-date-object/locales/persian_fa";
 
 interface Todo {
@@ -39,34 +43,20 @@ interface HistoryEntry {
 
 const HISTORY_PAGE_SIZE = 15;
 
-/** Convert Jalali (YYYY/MM/DD) → Gregorian (YYYY-MM-DD) for backend */
-function jalaliToGregorian(jalaliStr: string): string {
-  const [y, m, d] = jalaliStr.split("/").map(Number);
-  const dateObj = new DateObject({
-    year: y,
-    month: m,
-    day: d,
-    calendar: persian,
-  });
-  dateObj.convert(gregorian);
-  return `${dateObj.year}-${String(dateObj.month.number).padStart(2, "0")}-${String(dateObj.day).padStart(2, "0")}`;
-}
-
 export default function LogsPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyPage, setHistoryPage] = useState(1);
 
-  // Today's Jalali date for the picker default
-  const todayJalali = format(new Date(), "yyyy/MM/dd");
-  const [jalaliParts] = useState(() => {
-    const [y, m, d] = todayJalali.split("/").map(Number);
-    return { y, m, d };
-  });
+  // History date filter (Jalali "YYYY/MM/DD" or "" for all)
+  const [historyFilter, setHistoryFilter] = useState<string>("");
 
-  // No todo_id in form — auto-derived from selected task
+  // Today is fixed — users can only submit reports for the current day.
+  const todayGregorian = todayGregorianStr();
+  const todayLong = todayJalaliLong();
+
+  // No work_date in the form anymore — it is always "today".
   const [formData, setFormData] = useState({
-    work_date: todayJalali,
     task_id: "",
     start_time: "08:00",
     end_time: "16:00",
@@ -79,6 +69,15 @@ export default function LogsPage() {
     type: "success" | "error";
     text: string;
   } | null>(null);
+
+  async function loadHistory(filterJalali: string) {
+    const qs = filterJalali
+      ? `?work_date=${jalaliStrToGregorianStr(filterJalali)}`
+      : "";
+    const data = await api<HistoryEntry[]>(`/timesheets/history${qs}`);
+    setHistory(data);
+    setHistoryPage(1);
+  }
 
   useEffect(() => {
     async function fetchData() {
@@ -96,6 +95,14 @@ export default function LogsPage() {
     fetchData();
   }, []);
 
+  // Reload history whenever the date filter changes.
+  useEffect(() => {
+    loadHistory(historyFilter).catch((err) =>
+      console.error("Failed to filter history", err),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyFilter]);
+
   const calculateDuration = () => {
     const [startH, startM] = formData.start_time.split(":").map(Number);
     const [endH, endM] = formData.end_time.split(":").map(Number);
@@ -107,7 +114,6 @@ export default function LogsPage() {
   const durationHours = Math.floor(durationMinutes / 60);
   const durationMins = durationMinutes % 60;
 
-  // Auto-selected task & its todos
   const selectedTask = tasks.find((t) => t.id === Number(formData.task_id));
   const taskTodos = selectedTask?.todos || [];
   const autoTodoId = taskTodos.length > 0 ? taskTodos[0].id : null;
@@ -149,7 +155,8 @@ export default function LogsPage() {
       await api("/timesheets", {
         method: "POST",
         body: JSON.stringify({
-          work_date: jalaliToGregorian(formData.work_date),
+          // Always today — no date input is shown to the user.
+          work_date: todayGregorian,
           task_id: Number(formData.task_id),
           todo_id: autoTodoId,
           start_time: formData.start_time,
@@ -165,9 +172,8 @@ export default function LogsPage() {
         focused_minutes: "",
         notes: "",
       }));
-      const data = await api<HistoryEntry[]>("/timesheets/history");
-      setHistory(data);
-      setHistoryPage(1);
+      // Refresh the history respecting the active filter.
+      await loadHistory(historyFilter);
     } catch (err: any) {
       setMessage({ type: "error", text: err.message || "خطایی در ثبت رخ داد" });
     } finally {
@@ -175,7 +181,7 @@ export default function LogsPage() {
     }
   };
 
-  // Paginated history
+  // Paginated history (client-side over the already-filtered result set)
   const historyTotalPages = Math.max(
     1,
     Math.ceil(history.length / HISTORY_PAGE_SIZE),
@@ -189,13 +195,8 @@ export default function LogsPage() {
     [history, historyPage],
   );
 
-  const toJalaliDisplay = (dateStr: string) => {
-    try {
-      return format(new Date(dateStr), "yyyy/MM/dd");
-    } catch {
-      return dateStr;
-    }
-  };
+  // Timezone-safe Jalali display (no Date()/UTC shift).
+  const toJalaliDisplay = (dateStr: string) => gregorianStrToJalaliStr(dateStr);
 
   const getTaskName = (taskId: number) =>
     tasks.find((t) => t.id === taskId)?.name || `تسک #${taskId}`;
@@ -209,7 +210,6 @@ export default function LogsPage() {
     return entry.notes || "—";
   };
 
-  // Pagination component
   const Pagination = ({
     currentPage,
     totalPages,
@@ -264,7 +264,7 @@ export default function LogsPage() {
         <div>
           <h1 className="text-3xl font-semibold">ثبت گزارش روزانه</h1>
           <p className="mt-1 text-sm text-slate-500">
-            لطفاً جزئیات فعالیت‌های خود را وارد کنید
+            لطفاً جزئیات فعالیت‌های امروز خود را وارد کنید
           </p>
         </div>
 
@@ -281,41 +281,14 @@ export default function LogsPage() {
         )}
 
         <form onSubmit={handleSubmit} className="card space-y-5">
-          {/* ── Persian Calendar Date Picker ── */}
+          {/* ── Today's date (read-only, highlighted) ── */}
           <div className="space-y-1 text-right">
             <label className="text-xs text-slate-600 dark:text-slate-300">
-              تاریخ (شمسی)
+              تاریخ امروز (شمسی)
             </label>
-            <DatePicker
-              value={
-                new DateObject({
-                  year: jalaliParts.y,
-                  month: jalaliParts.m,
-                  day: jalaliParts.d,
-                  calendar: persian,
-                  locale: persian_fa,
-                })
-              }
-              onChange={(date: any) => {
-                if (date && !Array.isArray(date)) {
-                  const y = date.year;
-                  const m = String(date.month.number ?? date.month).padStart(
-                    2,
-                    "0",
-                  );
-                  const d = String(date.day).padStart(2, "0");
-                  setFormData((prev) => ({
-                    ...prev,
-                    work_date: `${y}/${m}/${d}`,
-                  }));
-                }
-              }}
-              calendar={persian}
-              locale={persian_fa}
-              format="YYYY/MM/DD"
-              inputClass="input w-full"
-              calendarPosition="bottom-right"
-            />
+            <div className="rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-center dark:bg-accent/10">
+              <span className="text-lg font-bold text-accent">{todayLong}</span>
+            </div>
           </div>
 
           {/* ── Task selector ── */}
@@ -459,60 +432,105 @@ export default function LogsPage() {
           </button>
         </form>
 
-        {/* ── History Table with Pagination ── */}
-        {history.length > 0 && (
-          <div className="card overflow-x-auto">
-            <h2 className="mb-4 text-lg font-medium">تاریخچه گزارش‌ها</h2>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800">
-                  <th className="p-3 text-right">تاریخ</th>
-                  <th className="p-3 text-right">وظیفه</th>
-                  <th className="p-3 text-right">شرح فعالیت</th>
-                  <th className="p-3 text-right">شروع</th>
-                  <th className="p-3 text-right">پایان</th>
-                  <th className="p-3 text-right">تمرکز</th>
-                  <th className="p-3 text-right">یادداشت</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginatedHistory.map((entry) => (
-                  <tr
-                    key={entry.id}
-                    className="border-b border-slate-100 dark:border-slate-900 hover:bg-slate-50 dark:hover:bg-slate-950"
-                  >
-                    <td className="p-3 whitespace-nowrap">
-                      {toJalaliDisplay(entry.work_date)}
-                    </td>
-                    <td className="p-3 whitespace-nowrap">
-                      {getTaskName(entry.task_id)}
-                    </td>
-                    <td className="p-3 whitespace-pre-line leading-relaxed max-w-xs">
-                      {getTodoTitle(entry)}
-                    </td>
-                    <td className="p-3 whitespace-nowrap font-mono text-xs">
-                      {entry.start_time}
-                    </td>
-                    <td className="p-3 whitespace-nowrap font-mono text-xs">
-                      {entry.end_time}
-                    </td>
-                    <td className="p-3 whitespace-nowrap">
-                      {entry.focused_minutes} دقیقه
-                    </td>
-                    <td className="p-3 whitespace-pre-line max-w-xs text-xs">
-                      {entry.notes || "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <Pagination
-              currentPage={historyPage}
-              totalPages={historyTotalPages}
-              onPageChange={setHistoryPage}
-            />
+        {/* ── History Table with Jalali filter + Pagination ── */}
+        <div className="card overflow-x-auto">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-medium">تاریخچه گزارش‌ها</h2>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">فیلتر تاریخ (شمسی):</span>
+              <DatePicker
+                value={historyFilter || ""}
+                onChange={(date: any) => {
+                  if (date && !Array.isArray(date)) {
+                    const y = date.year;
+                    const m = String(date.month.number ?? date.month).padStart(
+                      2,
+                      "0",
+                    );
+                    const d = String(date.day).padStart(2, "0");
+                    setHistoryFilter(`${y}/${m}/${d}`);
+                  } else {
+                    setHistoryFilter("");
+                  }
+                }}
+                calendar={persian}
+                locale={persian_fa}
+                format="YYYY/MM/DD"
+                inputClass="input w-40 text-sm"
+                calendarPosition="bottom-right"
+                placeholder="همه روزها"
+              />
+              {historyFilter && (
+                <button
+                  type="button"
+                  className="text-xs text-red-500 hover:text-red-600"
+                  onClick={() => setHistoryFilter("")}
+                >
+                  حذف فیلتر
+                </button>
+              )}
+            </div>
           </div>
-        )}
+
+          {history.length === 0 ? (
+            <div className="py-10 text-center text-sm text-slate-400">
+              {historyFilter
+                ? "برای این تاریخ گزارشی ثبت نشده است"
+                : "هنوز گزارشی ثبت نشده است"}
+            </div>
+          ) : (
+            <>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800">
+                    <th className="p-3 text-right">تاریخ</th>
+                    <th className="p-3 text-right">وظیفه</th>
+                    <th className="p-3 text-right">شرح فعالیت</th>
+                    <th className="p-3 text-right">شروع</th>
+                    <th className="p-3 text-right">پایان</th>
+                    <th className="p-3 text-right">تمرکز</th>
+                    <th className="p-3 text-right">یادداشت</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedHistory.map((entry) => (
+                    <tr
+                      key={entry.id}
+                      className="border-b border-slate-100 dark:border-slate-900 hover:bg-slate-50 dark:hover:bg-slate-950"
+                    >
+                      <td className="p-3 whitespace-nowrap">
+                        {toJalaliDisplay(entry.work_date)}
+                      </td>
+                      <td className="p-3 whitespace-nowrap">
+                        {getTaskName(entry.task_id)}
+                      </td>
+                      <td className="p-3 whitespace-pre-line leading-relaxed max-w-xs">
+                        {getTodoTitle(entry)}
+                      </td>
+                      <td className="p-3 whitespace-nowrap font-mono text-xs">
+                        {entry.start_time}
+                      </td>
+                      <td className="p-3 whitespace-nowrap font-mono text-xs">
+                        {entry.end_time}
+                      </td>
+                      <td className="p-3 whitespace-nowrap">
+                        {entry.focused_minutes} دقیقه
+                      </td>
+                      <td className="p-3 whitespace-pre-line max-w-xs text-xs">
+                        {entry.notes || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <Pagination
+                currentPage={historyPage}
+                totalPages={historyTotalPages}
+                onPageChange={setHistoryPage}
+              />
+            </>
+          )}
+        </div>
       </div>
     </Shell>
   );
